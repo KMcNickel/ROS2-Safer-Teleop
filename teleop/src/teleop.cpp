@@ -13,18 +13,30 @@
 
 #include "geometry_msgs/msg/twist.hpp"
 
+#define INPUT_TIMER_DURATION_MS 1
+
 class Teleop : public rclcpp::Node
 {
     public:
         explicit Teleop() : Node("Teleop")
         {
             initscr();
+            noecho();
             timeout(0);
 
-            twistPublisher = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+            createParameters();
 
-            outputTimer = rclcpp::create_timer(this, get_clock(), std::chrono::milliseconds(50), std::bind(&Teleop::outputTimerCallback, this));
-            inputTimer = rclcpp::create_timer(this, get_clock(), std::chrono::milliseconds(5), std::bind(&Teleop::inputTimerCallback, this));
+            linearSpeedFactor = defaultLinearSpeedFactor;
+            angularSpeedFactor = defaultAngularSpeedFactor;
+
+            drawScreen();
+
+            twistPublisher = this->create_publisher<geometry_msgs::msg::Twist>(topicName, 10);
+
+            outputTimer = rclcpp::create_timer(this, get_clock(), std::chrono::milliseconds(outputRateMs),
+                    std::bind(&Teleop::outputTimerCallback, this));
+            inputTimer = rclcpp::create_timer(this, get_clock(), std::chrono::milliseconds(INPUT_TIMER_DURATION_MS),
+                    std::bind(&Teleop::inputTimerCallback, this));
         }
 
         ~Teleop()
@@ -64,6 +76,51 @@ class Teleop : public rclcpp::Node
             {'e', {1, 1.1}},
             {'c', {1, 0.9}}
         };
+        std::map<char, std::vector<float>> speedAbsBindings
+        {
+            {'a', {1, 1}},
+            {'s', {1, 0}},
+            {'d', {0, 1}}
+        };
+
+        void createParameters()
+        {
+            this->declare_parameter<double>("linear_speed", 1);
+            this->declare_parameter<double>("angular_speed", 1);
+            this->declare_parameter<int64_t>("output_rate_ms", 50);
+            this->declare_parameter<int64_t>("input_expiration_ms", 2000);
+            this->declare_parameter<std::string>("topic", "/cmd_vel");
+
+            this->get_parameter("linear_speed", defaultLinearSpeedFactor);
+            this->get_parameter("angular_speed", defaultAngularSpeedFactor);
+            this->get_parameter("output_rate_ms", outputRateMs);
+            this->get_parameter("input_expiration_ms", inputExpirationMs);
+            this->get_parameter("topic", topicName);
+        }
+
+        void drawScreen()
+        {
+            mvprintw(0, 0,  "       Safer Teleop");
+            mvprintw(1, 0,  "-------------------------");
+            mvprintw(2, 0,  "Moving in a straight line");
+            mvprintw(3, 0,  "U           I           O");
+            mvprintw(4, 0,  "J           K (Stop)    L");
+            mvprintw(5, 0,  "M           <           >");
+
+            mvprintw(7, 0,  "Moving and turning");
+            mvprintw(8, 0,  "u           i           o");
+            mvprintw(9, 0,  "j           k (Stop)    l");
+            mvprintw(10, 0, "m           ,           .");
+
+            mvprintw(12, 0, "Speed   | Faster | Slower | Reset");
+            mvprintw(13, 0, "---------------------------------");
+            mvprintw(14, 0, "Overall |   q    |   z    |   a");
+            mvprintw(15, 0, " Linear |   w    |   x    |   s");
+            mvprintw(16, 0, "Angular |   e    |   c    |   d");
+
+            updateSpeedDisplay();
+
+        }
 
         void sendTwistMessage()
         {
@@ -84,6 +141,17 @@ class Teleop : public rclcpp::Node
             sendTwistMessage();
         }
 
+        void updateSpeedDisplay()
+        {
+            move(19, 0);
+            clrtoeol();
+            mvprintw(19, 0, "Linear: %f", linearSpeedFactor);
+            move(20, 0);
+            clrtoeol();
+            mvprintw(20, 0, "Angular: %f", angularSpeedFactor);
+            move(21, 0);
+        }
+
         void setStop()
         {
             speeds[0] = speeds[1] = speeds[2] = 0;
@@ -95,7 +163,7 @@ class Teleop : public rclcpp::Node
             if(c == ERR)
             {
                 timerCount++;
-                if(timerCount == 400)
+                if(timerCount >= inputExpirationMs / INPUT_TIMER_DURATION_MS)
                 {
                     setStop();
                     sendTwistMessage();
@@ -115,6 +183,17 @@ class Teleop : public rclcpp::Node
                 {
                     linearSpeedFactor *= speedBindings[c][0];
                     angularSpeedFactor *= speedBindings[c][1];
+
+                    updateSpeedDisplay();
+                }
+                else if(speedAbsBindings.count(c) == 1)
+                {
+                    if(speedAbsBindings[c][0])
+                        linearSpeedFactor = defaultLinearSpeedFactor;
+                    if(speedAbsBindings[c][1])
+                        angularSpeedFactor = defaultAngularSpeedFactor;
+
+                    updateSpeedDisplay();
                 }
                 else
                 {
@@ -132,10 +211,15 @@ class Teleop : public rclcpp::Node
 
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr twistPublisher;
 
-        float linearSpeedFactor = 1;
-        float angularSpeedFactor = 1;
-        float speeds[3];
+        double linearSpeedFactor;
+        double angularSpeedFactor;
+        double defaultLinearSpeedFactor;
+        double defaultAngularSpeedFactor;
+        double speeds[3];
         int timerCount;
+        int outputRateMs;
+        int inputExpirationMs;
+        std::string topicName;
 };
 
 int main(int argc, char * argv[])
